@@ -39,12 +39,15 @@
     .para-item:hover { background: #1e1e1e; color: #aaa; }
     .para-item.active { background: #0f1e3d; color: #5b8ff9; border-color: #1a3060; }
     .para-item.done { color: #333; }
-    #audio-player { width: 100%; border-radius: 8px; display: none; margin-top: 8px; }
-    #loading-container { display: none; flex-direction: column; gap: 8px; }
-    #loading-bar { height: 3px; background: #222; border-radius: 4px; overflow: hidden; }
-    #loading-progress { height: 100%; background: #5b8ff9; width: 0%; transition: width 0.2s; }
+    .para-item.type-titulo { font-size: 13px; font-weight: 500; color: #888; border-left: 2px solid #2e2e2e; padding-left: 8px; }
+    .para-item.type-titulo.active { color: #5b8ff9; border-left-color: #5b8ff9; }
+    .para-item.type-subtitulo { font-style: italic; color: #555; }
+    #audio-player { width: 100%; border-radius: 8px; display: none; margin-top: 8px; outline: none; }
+    #loading-container { display: none; align-items: center; gap: 10px; }
+    #spinner { width: 18px; height: 18px; border: 2px solid #2e2e2e; border-top-color: #5b8ff9; border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     #loading-text { font-size: 12px; color: #555; }
-    #toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: #1e1e1e; border: 0.5px solid #333; color: #ccc; font-size: 13px; padding: 8px 18px; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+    #toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: #1e1e1e; border: 0.5px solid #333; color: #ccc; font-size: 13px; padding: 8px 18px; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 999; }
     #toast.show { opacity: 1; }
   </style>
 </head>
@@ -59,10 +62,9 @@
   </div>
 
   <div id="file-info"></div>
-
   <div id="loading-container">
-    <div id="loading-text">Extraindo texto...</div>
-    <div id="loading-bar"><div id="loading-progress"></div></div>
+    <div id="spinner"></div>
+    <div id="loading-text">Processando PDF...</div>
   </div>
 
   <div id="player">
@@ -72,9 +74,9 @@
         <button class="primary" id="btn-play" onclick="play()">▶ Reproduzir</button>
         <button id="btn-stop" onclick="stopAll(true)" disabled>⏹ Parar</button>
         <select id="voice-select" onchange="restartCurrentParagraph()">
-          <option value="pt-BR-ThalitaNeural">Thalita (pt-BR ♀)></option>
+          <option value="pt-BR-ThalitaMultilingualNeural">Thalita (pt-BR ♀)</option>
           <option value="pt-BR-FranciscaNeural">Francisca (pt-BR ♀)</option>
-          <option value="pt-BR-AntonioNeural">Antonio (pt-BR ♂)</option>     
+          <option value="pt-BR-AntonioNeural">Antonio (pt-BR ♂)</option>
           <option value="pt-PT-DuarteNeural">Duarte (pt-PT ♂)</option>
           <option value="pt-PT-RaquelNeural">Raquel (pt-PT ♀)</option>
         </select>
@@ -96,65 +98,161 @@
 <div id="toast"></div>
 
 <script>
-const API_URL = '';
-let paragraphs = [];
-let currentIdx = 0;
-let isPlaying = false;
-let nextAudioBlob = null;
+const API_URL = 'http://127.0.0.1:8000';
 
-// Drag & drop
-const dz = document.getElementById('drop-zone');
-dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
-dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
-dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag-over'); handleFile(e.dataTransfer.files[0]); });
-document.getElementById('file-input').addEventListener('change', e => handleFile(e.target.files[0]));
+// Estado agrupado para facilitar a manutenção
+const state = {
+  paragraphs: [],
+  currentIdx: 0,
+  isPlaying: false,
+  nextAudioBlob: null,
+  sessionId: 0,
+  preRenderAbort: null,
+  activeFetchAbort: null // <-- Controlador da requisição principal
+};
 
+// ── Elementos DOM principais ─────────────────────────────
+const DOM = {
+  dz: document.getElementById('drop-zone'),
+  fileInput: document.getElementById('file-input'),
+  fileInfo: document.getElementById('file-info'),
+  player: document.getElementById('player'),
+  loading: document.getElementById('loading-container'),
+  loadingText: document.getElementById('loading-text'),
+  paraList: document.getElementById('paragraph-list'),
+  audio: document.getElementById('audio-player'),
+  btnPlay: document.getElementById('btn-play'),
+  btnStop: document.getElementById('btn-stop'),
+  progressBar: document.getElementById('progress-bar'),
+  status: document.getElementById('status'),
+  speedSlider: document.getElementById('speed'),
+  speedVal: document.getElementById('speed-val'),
+  voiceSelect: document.getElementById('voice-select')
+};
+
+// ── Drag & drop ──────────────────────────────────────────
+DOM.dz.addEventListener('dragover', e => { e.preventDefault(); DOM.dz.classList.add('drag-over'); });
+DOM.dz.addEventListener('dragleave', () => DOM.dz.classList.remove('drag-over'));
+DOM.dz.addEventListener('drop', e => { 
+  e.preventDefault(); 
+  DOM.dz.classList.remove('drag-over'); 
+  handleFile(e.dataTransfer.files[0]); 
+});
+DOM.fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+// ── Carregar PDF ─────────────────────────────────────────
 async function handleFile(file) {
   if (!file || file.type !== 'application/pdf') return;
   stopAll(true);
-  nextAudioBlob = null;
 
-  document.getElementById('file-info').style.display = 'block';
-  document.getElementById('file-info').textContent = '📄 ' + file.name;
-  document.getElementById('player').style.display = 'none';
-  document.getElementById('loading-container').style.display = 'flex';
-  document.getElementById('loading-text').textContent = 'Enviando PDF para extração...';
-  document.getElementById('loading-progress').style.width = '30%';
+  DOM.fileInfo.style.display = 'block';
+  DOM.fileInfo.textContent = '📄 ' + file.name;
+  DOM.player.style.display = 'none';
+  DOM.loading.style.display = 'flex';
+  DOM.loadingText.textContent = 'Processando PDF...';
 
   try {
     const formData = new FormData();
     formData.append('file', file);
-
+    
     const res = await fetch(`${API_URL}/extract`, { method: 'POST', body: formData });
-    if (!res.ok) throw new Error('Erro na extração');
-
-    document.getElementById('loading-progress').style.width = '100%';
+    if (!res.ok) throw new Error();
+    
     const data = await res.json();
-    paragraphs = data.paragraphs;
-
+    state.paragraphs = data.paragraphs;
     renderList();
-    document.getElementById('loading-container').style.display = 'none';
-    document.getElementById('player').style.display = 'flex';
-    setStatus(`${paragraphs.length} parágrafos encontrados. Pronto para reproduzir.`);
+    
+    DOM.loading.style.display = 'none';
+    DOM.player.style.display = 'flex';
+    setStatus(`${state.paragraphs.length} blocos encontrados. Pronto para reproduzir.`);
   } catch(e) {
-    document.getElementById('loading-container').style.display = 'none';
-    showToast('Erro ao extrair PDF. Backend rodando?');
-    console.error(e);
+    DOM.loading.style.display = 'none';
+    showToast('Erro ao extrair PDF. O backend está rodando?');
   }
 }
 
+// ── Lista de parágrafos ──────────────────────────────────
 function renderList() {
-  const el = document.getElementById('paragraph-list');
-  el.innerHTML = '';
-  paragraphs.forEach((p, i) => {
+  DOM.paraList.innerHTML = '';
+  state.paragraphs.forEach((p, i) => {
     const d = document.createElement('div');
-    d.className = 'para-item';
+    d.className = `para-item type-${p.type || 'paragrafo'}`;
     d.id = 'para-' + i;
-    d.textContent = p.substring(0, 120) + (p.length > 120 ? '…' : '');
-    d.title = p;
-    d.onclick = () => { const idx = i; stopAll(false); currentIdx = idx; nextAudioBlob = null; play(); };
-    el.appendChild(d);
+    d.textContent = p.text.substring(0, 120) + (p.text.length > 120 ? '…' : '');
+    d.title = p.text;
+    d.onclick = () => jumpTo(i);
+    DOM.paraList.appendChild(d);
   });
+}
+
+// ── Funcões de Cancelamento Global ───────────────────────
+function cancelAllFetches() {
+  if (state.preRenderAbort) { 
+    state.preRenderAbort.abort(); 
+    state.preRenderAbort = null; 
+  }
+  if (state.activeFetchAbort) {
+    state.activeFetchAbort.abort();
+    state.activeFetchAbort = null;
+  }
+  state.nextAudioBlob = null;
+}
+
+// ── Navegação ───────────────────────────────────────────
+function jumpTo(idx) {
+  state.sessionId++; // ISSO É A CHAVE: Mata o loop anterior instantaneamente
+  cancelAllFetches(); // Aborta conexões com o backend
+  stopAudio();
+  
+  state.currentIdx = idx;
+  
+  if (state.isPlaying) {
+    resumeFrom(idx);
+  } else {
+    setActive(idx);
+    setStatus(`Posicionado no bloco ${idx + 1}. Clique em Reproduzir.`);
+  }
+}
+
+function stopAudio() {
+  DOM.audio.pause();
+  DOM.audio.removeAttribute('src'); // Força a liberação da memória do blob anterior
+  DOM.audio.load();
+}
+
+async function resumeFrom(idx) {
+  const sid = state.sessionId;
+  state.currentIdx = idx;
+  
+  try {
+    for (; state.currentIdx < state.paragraphs.length; state.currentIdx++) {
+      if (!state.isPlaying || state.sessionId !== sid) break;
+      
+      setActive(state.currentIdx);
+      setStatus(`Lendo bloco ${state.currentIdx + 1} de ${state.paragraphs.length}...`);
+      
+      await playParagraph(state.currentIdx, sid);
+      if (state.sessionId !== sid) break;
+    }
+    
+    if (state.sessionId === sid && state.currentIdx >= state.paragraphs.length) {
+      setStatus('Leitura concluída.');
+      document.querySelectorAll('.para-item').forEach(el => el.classList.add('done'));
+      DOM.progressBar.style.width = '100%';
+      state.currentIdx = 0;
+      state.isPlaying = false;
+      DOM.btnPlay.disabled = false;
+      DOM.btnStop.disabled = true;
+    }
+  } catch(e) {
+    if (state.sessionId === sid && e.name !== 'AbortError') {
+      setStatus('Erro.'); 
+      showToast('Verifique o backend.');
+      state.isPlaying = false;
+      DOM.btnPlay.disabled = false;
+      DOM.btnStop.disabled = true;
+    }
+  }
 }
 
 function setActive(i) {
@@ -162,35 +260,49 @@ function setActive(i) {
     el.classList.remove('active');
     if (idx < i) el.classList.add('done'); else el.classList.remove('done');
   });
+  
   const el = document.getElementById('para-' + i);
-  if (el) { el.classList.add('active'); el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
-  const pct = paragraphs.length > 0 ? Math.round((i / paragraphs.length) * 100) : 0;
-  document.getElementById('progress-bar').style.width = pct + '%';
+  if (el) { 
+    el.classList.add('active'); 
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' }); // Centraliza melhor a visualização
+  }
+  
+  const pct = state.paragraphs.length > 0 ? Math.round((i / state.paragraphs.length) * 100) : 0;
+  DOM.progressBar.style.width = pct + '%';
 }
 
+// ── Controles de Áudio ───────────────────────────────────
 function onSpeedChange() {
-  const val = parseInt(document.getElementById('speed').value);
-  document.getElementById('speed-val').textContent = (val > 0 ? '+' : '') + val + '%';
-  const audio = document.getElementById('audio-player');
-  audio.playbackRate = Math.max(0.5, Math.min(2.0, 1 + (val / 100)));
+  const val = parseInt(DOM.speedSlider.value);
+  DOM.speedVal.textContent = (val > 0 ? '+' : '') + val + '%';
+  DOM.audio.playbackRate = Math.max(0.5, Math.min(2.0, 1 + val / 100));
 }
 
 function restartCurrentParagraph() {
-  if (!isPlaying) return;
-  const idx = currentIdx;
-  stopAll(false);
-  currentIdx = idx;
-  nextAudioBlob = null;
-  play();
+  if (!state.isPlaying) return;
+  cancelAllFetches();
+  const idx = state.currentIdx;
+  stopAudio();
+  resumeFrom(idx);
 }
 
-async function fetchAudio(text, voice, rate) {
+// ── Fetch e Pre-render ───────────────────────────────────
+async function fetchAudio(item, voice, signal) {
   const res = await fetch(`${API_URL}/tts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paragraphs: [text], start_index: 0, voice, rate })
+    body: JSON.stringify({
+      paragraphs: [item.text],
+      types: [item.type || 'paragrafo'],
+      start_index: 0, 
+      voice, 
+      rate: "+0%" // Deixa o backend neutro para evitar duplo aceleramento
+    }),
+    signal
   });
+  
   if (!res.ok) throw new Error('Erro no servidor');
+  
   const reader = res.body.getReader();
   const chunks = [];
   while (true) {
@@ -201,95 +313,109 @@ async function fetchAudio(text, voice, rate) {
   return new Blob(chunks, { type: 'audio/mpeg' });
 }
 
-async function preRenderNext() {
-  if (currentIdx + 1 >= paragraphs.length || !isPlaying) return;
-  const voice = document.getElementById('voice-select').value;
-  const val = parseInt(document.getElementById('speed').value);
-  const rate = (val >= 0 ? '+' : '') + val + '%';
+async function preRenderNext(sid) {
+  if (state.currentIdx + 1 >= state.paragraphs.length || !state.isPlaying) return;
+  
+  if (state.preRenderAbort) { 
+    state.preRenderAbort.abort(); 
+  }
+  state.preRenderAbort = new AbortController();
+  const ctrl = state.preRenderAbort;
+  const voice = DOM.voiceSelect.value;
+  
   try {
-    nextAudioBlob = await fetchAudio(paragraphs[currentIdx + 1], voice, rate);
-  } catch(e) { nextAudioBlob = null; }
+    const blob = await fetchAudio(state.paragraphs[state.currentIdx + 1], voice, ctrl.signal);
+    if (!ctrl.signal.aborted && state.sessionId === sid) {
+      state.nextAudioBlob = blob;
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') state.nextAudioBlob = null;
+  } finally {
+    if (state.preRenderAbort === ctrl) state.preRenderAbort = null;
+  }
 }
 
-async function playParagraph(idx) {
-  const voice = document.getElementById('voice-select').value;
-  const val = parseInt(document.getElementById('speed').value);
-  const rate = (val >= 0 ? '+' : '') + val + '%';
-
-  let blob = nextAudioBlob;
-  nextAudioBlob = null;
+// ── Tocar Parágrafo ──────────────────────────────────────
+async function playParagraph(idx, sid) {
+  const voice = DOM.voiceSelect.value;
+  let blob = state.nextAudioBlob;
+  state.nextAudioBlob = null;
 
   if (!blob) {
-    setStatus(`Gerando áudio... parágrafo ${idx + 1}`);
-    blob = await fetchAudio(paragraphs[idx], voice, rate);
+    setStatus(`Gerando áudio... bloco ${idx + 1}`);
+    state.activeFetchAbort = new AbortController();
+    try {
+      blob = await fetchAudio(state.paragraphs[idx], voice, state.activeFetchAbort.signal);
+    } catch(e) {
+      if (e.name === 'AbortError') return; // Sai limpo se foi cancelado
+      throw e;
+    } finally {
+      state.activeFetchAbort = null;
+    }
   }
 
+  // Se a sessão mudou durante o fetch
+  if (state.sessionId !== sid) return;
+
   const url = URL.createObjectURL(blob);
-  const audio = document.getElementById('audio-player');
-  audio.src = url;
-  audio.style.display = 'block';
-  audio.playbackRate = Math.max(0.5, Math.min(2.0, 1 + (val / 100)));
+  DOM.audio.src = url;
+  DOM.audio.style.display = 'block';
+  
+  const speedVal = parseInt(DOM.speedSlider.value);
+  DOM.audio.playbackRate = Math.max(0.5, Math.min(2.0, 1 + speedVal / 100));
 
-  preRenderNext();
+  preRenderNext(sid);
 
-  await audio.play();
+  await DOM.audio.play();
+
   return new Promise((resolve, reject) => {
-    audio.onended = resolve;
-    audio.onerror = reject;
+    const onEnded = () => { cleanup(); if (state.sessionId === sid) resolve(); else resolve(); };
+    const onError = (e) => { cleanup(); reject(e); };
+    
+    const cleanup = () => {
+      DOM.audio.removeEventListener('ended', onEnded);
+      DOM.audio.removeEventListener('error', onError);
+      URL.revokeObjectURL(url);
+    };
+
+    DOM.audio.addEventListener('ended', onEnded);
+    DOM.audio.addEventListener('error', onError);
   });
 }
 
+// ── Ações de Controle ────────────────────────────────────
 async function play() {
-  if (isPlaying || paragraphs.length === 0) return;
-  isPlaying = true;
-  document.getElementById('btn-play').disabled = true;
-  document.getElementById('btn-stop').disabled = false;
-
-  try {
-    for (; currentIdx < paragraphs.length; currentIdx++) {
-      if (!isPlaying) break;
-      setActive(currentIdx);
-      setStatus(`Lendo parágrafo ${currentIdx + 1} de ${paragraphs.length}...`);
-      await playParagraph(currentIdx);
-    }
-    if (currentIdx >= paragraphs.length) {
-      setStatus('Leitura concluída.');
-      document.querySelectorAll('.para-item').forEach(el => el.classList.add('done'));
-      document.getElementById('progress-bar').style.width = '100%';
-      currentIdx = 0;
-    }
-  } catch(e) {
-    if (e.name !== 'AbortError') {
-      setStatus('Erro. Verifique se o backend está rodando.');
-      showToast('Backend não encontrado em localhost:8000');
-      console.error(e);
-    }
-  }
-
-  isPlaying = false;
-  nextAudioBlob = null;
-  document.getElementById('btn-play').disabled = false;
-  document.getElementById('btn-stop').disabled = true;
+  if (state.isPlaying || state.paragraphs.length === 0) return;
+  state.isPlaying = true;
+  state.sessionId++;
+  DOM.btnPlay.disabled = true;
+  DOM.btnStop.disabled = false;
+  await resumeFrom(state.currentIdx);
 }
 
 function stopAll(resetIdx = true) {
-  isPlaying = false;
-  nextAudioBlob = null;
-  const audio = document.getElementById('audio-player');
-  audio.pause();
-  audio.src = '';
-  if (resetIdx) currentIdx = 0;
-  document.getElementById('btn-play').disabled = false;
-  document.getElementById('btn-stop').disabled = true;
-  document.getElementById('progress-bar').style.width = '0%';
+  state.sessionId++;
+  state.isPlaying = false;
+  cancelAllFetches();
+  stopAudio();
+  
+  if (resetIdx) {
+    state.currentIdx = 0;
+    DOM.progressBar.style.width = '0%';
+  }
+  
+  DOM.btnPlay.disabled = false;
+  DOM.btnStop.disabled = true;
   document.querySelectorAll('.para-item').forEach(el => el.classList.remove('active', 'done'));
-  if (paragraphs.length > 0) setStatus('Pronto para reproduzir.');
+  
+  if (state.paragraphs.length > 0) setStatus('Pronto para reproduzir.');
 }
 
-function setStatus(msg) { document.getElementById('status').textContent = msg; }
+function setStatus(msg) { DOM.status.textContent = msg; }
+
 function showToast(msg) {
   const t = document.getElementById('toast');
-  t.textContent = msg;
+  t.textContent = msg; 
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 3000);
 }
