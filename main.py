@@ -74,7 +74,7 @@ async def extract(file: UploadFile = File(...)):
 class TTSRequest(BaseModel):
     paragraphs: list[str]
     start_index: int = 0
-    voice: str = "pt-BR-FranciscaNeural"
+    voice: str = "pt-BR-ThalitaNeural"
     rate: str = "+0%"
 
 async def stream_from_index(paragraphs, start, voice, rate):
