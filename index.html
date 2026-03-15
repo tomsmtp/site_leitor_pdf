@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PDF Reader</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f0f0f; color: #e8e8e8; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem; }
+    .container { width: 100%; max-width: 680px; display: flex; flex-direction: column; gap: 1.25rem; }
+    h1 { font-size: 20px; font-weight: 500; letter-spacing: -0.02em; color: #fff; }
+    h1 span { color: #5b8ff9; }
+    #drop-zone { border: 1.5px dashed #2e2e2e; border-radius: 12px; padding: 2.5rem; text-align: center; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+    #drop-zone:hover, #drop-zone.drag-over { border-color: #5b8ff9; background: #141414; }
+    #drop-zone input { display: none; }
+    #drop-zone .icon { font-size: 32px; margin-bottom: 10px; }
+    #drop-zone p { font-size: 14px; color: #888; }
+    #drop-zone p strong { color: #ccc; font-weight: 500; }
+    #file-info { font-size: 13px; color: #666; display: none; }
+    #player { display: none; flex-direction: column; gap: 1rem; }
+    .card { background: #161616; border: 0.5px solid #222; border-radius: 10px; padding: 1rem 1.25rem; }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    button { padding: 8px 16px; border-radius: 8px; border: 0.5px solid #2e2e2e; background: #1e1e1e; color: #e8e8e8; font-size: 13px; cursor: pointer; transition: background 0.1s; }
+    button:hover:not(:disabled) { background: #252525; border-color: #444; }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
+    button.primary { background: #5b8ff9; border-color: #5b8ff9; color: #fff; font-weight: 500; }
+    button.primary:hover:not(:disabled) { background: #4a7de8; }
+    select { padding: 7px 10px; border-radius: 8px; border: 0.5px solid #2e2e2e; background: #1e1e1e; color: #e8e8e8; font-size: 13px; cursor: pointer; }
+    .speed-row { display: flex; align-items: center; gap: 10px; font-size: 13px; color: #777; }
+    input[type=range] { -webkit-appearance: none; width: 120px; height: 4px; border-radius: 4px; background: #2e2e2e; outline: none; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: #5b8ff9; cursor: pointer; }
+    #speed-val { color: #ccc; font-weight: 500; min-width: 32px; }
+    #progress-wrap { height: 3px; background: #222; border-radius: 4px; overflow: hidden; }
+    #progress-bar { height: 100%; background: #5b8ff9; width: 0%; transition: width 0.4s; }
+    #status { font-size: 12px; color: #555; min-height: 16px; margin-top: 8px; }
+    .section-label { font-size: 11px; color: #444; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 500; margin-bottom: 8px; }
+    #paragraph-list { max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; scrollbar-width: thin; scrollbar-color: #2e2e2e transparent; }
+    .para-item { font-size: 13px; color: #666; padding: 7px 10px; border-radius: 6px; cursor: pointer; line-height: 1.5; transition: background 0.1s; border: 0.5px solid transparent; }
+    .para-item:hover { background: #1e1e1e; color: #aaa; }
+    .para-item.active { background: #0f1e3d; color: #5b8ff9; border-color: #1a3060; }
+    .para-item.done { color: #333; }
+    #audio-player { width: 100%; border-radius: 8px; display: none; margin-top: 8px; }
+    #loading-container { display: none; flex-direction: column; gap: 8px; }
+    #loading-bar { height: 3px; background: #222; border-radius: 4px; overflow: hidden; }
+    #loading-progress { height: 100%; background: #5b8ff9; width: 0%; transition: width 0.2s; }
+    #loading-text { font-size: 12px; color: #555; }
+    #toast { position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); background: #1e1e1e; border: 0.5px solid #333; color: #ccc; font-size: 13px; padding: 8px 18px; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>PDF <span>Reader</span></h1>
+
+  <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+    <input type="file" id="file-input" accept="application/pdf" />
+    <div class="icon">📄</div>
+    <p><strong>Clique para selecionar</strong> ou arraste um PDF aqui</p>
+  </div>
+
+  <div id="file-info"></div>
+
+  <div id="loading-container">
+    <div id="loading-text">Extraindo texto...</div>
+    <div id="loading-bar"><div id="loading-progress"></div></div>
+  </div>
+
+  <div id="player">
+    <div class="card">
+      <div id="progress-wrap"><div id="progress-bar"></div></div>
+      <div class="controls" style="margin-top:1rem;">
+        <button class="primary" id="btn-play" onclick="play()">▶ Reproduzir</button>
+        <button id="btn-stop" onclick="stopAll(true)" disabled>⏹ Parar</button>
+        <select id="voice-select" onchange="restartCurrentParagraph()">
+          <option value="pt-BR-FranciscaNeural">Francisca (pt-BR ♀)</option>
+          <option value="pt-BR-AntonioNeural">Antonio (pt-BR ♂)</option>
+          <option value="pt-PT-DuarteNeural">Duarte (pt-PT ♂)</option>
+          <option value="pt-PT-RaquelNeural">Raquel (pt-PT ♀)</option>
+        </select>
+      </div>
+      <div class="speed-row" style="margin-top:1rem;">
+        <span>Velocidade</span>
+        <input type="range" id="speed" min="-50" max="100" step="10" value="0" oninput="onSpeedChange()"/>
+        <span id="speed-val">0%</span>
+      </div>
+      <audio id="audio-player" controls></audio>
+      <div id="status">Selecione um parágrafo ou clique em Reproduzir.</div>
+    </div>
+    <div class="card">
+      <div class="section-label">Parágrafos</div>
+      <div id="paragraph-list"></div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+const API_URL = '';
+let paragraphs = [];
+let currentIdx = 0;
+let isPlaying = false;
+let nextAudioBlob = null;
+
+// Drag & drop
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('drag-over'); handleFile(e.dataTransfer.files[0]); });
+document.getElementById('file-input').addEventListener('change', e => handleFile(e.target.files[0]));
+
+async function handleFile(file) {
+  if (!file || file.type !== 'application/pdf') return;
+  stopAll(true);
+  nextAudioBlob = null;
+
+  document.getElementById('file-info').style.display = 'block';
+  document.getElementById('file-info').textContent = '📄 ' + file.name;
+  document.getElementById('player').style.display = 'none';
+  document.getElementById('loading-container').style.display = 'flex';
+  document.getElementById('loading-text').textContent = 'Enviando PDF para extração...';
+  document.getElementById('loading-progress').style.width = '30%';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const res = await fetch(`${API_URL}/extract`, { method: 'POST', body: formData });
+    if (!res.ok) throw new Error('Erro na extração');
+
+    document.getElementById('loading-progress').style.width = '100%';
+    const data = await res.json();
+    paragraphs = data.paragraphs;
+
+    renderList();
+    document.getElementById('loading-container').style.display = 'none';
+    document.getElementById('player').style.display = 'flex';
+    setStatus(`${paragraphs.length} parágrafos encontrados. Pronto para reproduzir.`);
+  } catch(e) {
+    document.getElementById('loading-container').style.display = 'none';
+    showToast('Erro ao extrair PDF. Backend rodando?');
+    console.error(e);
+  }
+}
+
+function renderList() {
+  const el = document.getElementById('paragraph-list');
+  el.innerHTML = '';
+  paragraphs.forEach((p, i) => {
+    const d = document.createElement('div');
+    d.className = 'para-item';
+    d.id = 'para-' + i;
+    d.textContent = p.substring(0, 120) + (p.length > 120 ? '…' : '');
+    d.title = p;
+    d.onclick = () => { const idx = i; stopAll(false); currentIdx = idx; nextAudioBlob = null; play(); };
+    el.appendChild(d);
+  });
+}
+
+function setActive(i) {
+  document.querySelectorAll('.para-item').forEach((el, idx) => {
+    el.classList.remove('active');
+    if (idx < i) el.classList.add('done'); else el.classList.remove('done');
+  });
+  const el = document.getElementById('para-' + i);
+  if (el) { el.classList.add('active'); el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+  const pct = paragraphs.length > 0 ? Math.round((i / paragraphs.length) * 100) : 0;
+  document.getElementById('progress-bar').style.width = pct + '%';
+}
+
+function onSpeedChange() {
+  const val = parseInt(document.getElementById('speed').value);
+  document.getElementById('speed-val').textContent = (val > 0 ? '+' : '') + val + '%';
+  const audio = document.getElementById('audio-player');
+  audio.playbackRate = Math.max(0.5, Math.min(2.0, 1 + (val / 100)));
+}
+
+function restartCurrentParagraph() {
+  if (!isPlaying) return;
+  const idx = currentIdx;
+  stopAll(false);
+  currentIdx = idx;
+  nextAudioBlob = null;
+  play();
+}
+
+async function fetchAudio(text, voice, rate) {
+  const res = await fetch(`${API_URL}/tts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paragraphs: [text], start_index: 0, voice, rate })
+  });
+  if (!res.ok) throw new Error('Erro no servidor');
+  const reader = res.body.getReader();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  return new Blob(chunks, { type: 'audio/mpeg' });
+}
+
+async function preRenderNext() {
+  if (currentIdx + 1 >= paragraphs.length || !isPlaying) return;
+  const voice = document.getElementById('voice-select').value;
+  const val = parseInt(document.getElementById('speed').value);
+  const rate = (val >= 0 ? '+' : '') + val + '%';
+  try {
+    nextAudioBlob = await fetchAudio(paragraphs[currentIdx + 1], voice, rate);
+  } catch(e) { nextAudioBlob = null; }
+}
+
+async function playParagraph(idx) {
+  const voice = document.getElementById('voice-select').value;
+  const val = parseInt(document.getElementById('speed').value);
+  const rate = (val >= 0 ? '+' : '') + val + '%';
+
+  let blob = nextAudioBlob;
+  nextAudioBlob = null;
+
+  if (!blob) {
+    setStatus(`Gerando áudio... parágrafo ${idx + 1}`);
+    blob = await fetchAudio(paragraphs[idx], voice, rate);
+  }
+
+  const url = URL.createObjectURL(blob);
+  const audio = document.getElementById('audio-player');
+  audio.src = url;
+  audio.style.display = 'block';
+  audio.playbackRate = Math.max(0.5, Math.min(2.0, 1 + (val / 100)));
+
+  preRenderNext();
+
+  await audio.play();
+  return new Promise((resolve, reject) => {
+    audio.onended = resolve;
+    audio.onerror = reject;
+  });
+}
+
+async function play() {
+  if (isPlaying || paragraphs.length === 0) return;
+  isPlaying = true;
+  document.getElementById('btn-play').disabled = true;
+  document.getElementById('btn-stop').disabled = false;
+
+  try {
+    for (; currentIdx < paragraphs.length; currentIdx++) {
+      if (!isPlaying) break;
+      setActive(currentIdx);
+      setStatus(`Lendo parágrafo ${currentIdx + 1} de ${paragraphs.length}...`);
+      await playParagraph(currentIdx);
+    }
+    if (currentIdx >= paragraphs.length) {
+      setStatus('Leitura concluída.');
+      document.querySelectorAll('.para-item').forEach(el => el.classList.add('done'));
+      document.getElementById('progress-bar').style.width = '100%';
+      currentIdx = 0;
+    }
+  } catch(e) {
+    if (e.name !== 'AbortError') {
+      setStatus('Erro. Verifique se o backend está rodando.');
+      showToast('Backend não encontrado em localhost:8000');
+      console.error(e);
+    }
+  }
+
+  isPlaying = false;
+  nextAudioBlob = null;
+  document.getElementById('btn-play').disabled = false;
+  document.getElementById('btn-stop').disabled = true;
+}
+
+function stopAll(resetIdx = true) {
+  isPlaying = false;
+  nextAudioBlob = null;
+  const audio = document.getElementById('audio-player');
+  audio.pause();
+  audio.src = '';
+  if (resetIdx) currentIdx = 0;
+  document.getElementById('btn-play').disabled = false;
+  document.getElementById('btn-stop').disabled = true;
+  document.getElementById('progress-bar').style.width = '0%';
+  document.querySelectorAll('.para-item').forEach(el => el.classList.remove('active', 'done'));
+  if (paragraphs.length > 0) setStatus('Pronto para reproduzir.');
+}
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+</script>
+</body>
+</html>
