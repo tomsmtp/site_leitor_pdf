@@ -71,13 +71,15 @@ def formatar_texto(text: str, tipo: str = 'paragrafo') -> str:
     text = RE_URL.sub('', text)
     text = RE_WWW.sub('', text)
     text = RE_EMAIL.sub('', text)
+    text = re.sub(r'(\w+)-\s+([a-záàâãéêíóôõúç])', r'\1\2', text)
     
     for pattern, replacement in ABREVIACOES_COMPILED:
         text = pattern.sub(replacement, text)
         
     text = RE_CHARS.sub(' ', text)
     text = RE_ART.sub(r'\1,', text)
-    text = RE_NUM.sub(safe_num2words, text)
+    # text = RE_NUM.sub(safe_num2words, text)
+    text = RE_NUM.sub(lambda m: safe_num2words(m) + ',', text)
     text = RE_SPACES.sub(' ', text).strip()
     
     if tipo in ('titulo', 'subtitulo') and text and not text.endswith(('.', ',')):
@@ -204,6 +206,7 @@ def extrair_com_pymupdf(pdf_bytes: bytes) -> list[dict]:
             texto = re.sub(r'\n', ' ', texto)
             texto = RE_URL.sub('', texto)
             texto = RE_SPACES.sub(' ', texto).strip()
+            text = re.sub(r'(\w+)-\s+([a-záàâãéêíóôõúç])', r'\1\2', text)
 
             if len(texto) < 10: continue
             if RE_NUM_ONLY.match(texto): continue
