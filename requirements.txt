@@ -3,3 +3,4 @@ uvicorn
 edge-tts
 pdfplumber
 num2words
+python-multipart
