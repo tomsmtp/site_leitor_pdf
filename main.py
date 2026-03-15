@@ -34,10 +34,6 @@ CID_MAP = {
     218:'Ú',199:'Ç',
 }
 
-@app.get("/google2e2619d14a369d8a.html")
-def google_verify():
-    return FileResponse("google2e2619d14a369d8a.html")
-
 # Pré-compilando Regex para máxima performance
 RE_CID = re.compile(r'\(cid:(\d+)\)')
 RE_SPACES = re.compile(r'\s+')
