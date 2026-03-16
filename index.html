@@ -59,12 +59,12 @@
   <!-- Banner de doação -->
   <div id="pix-banner" style="background:#161616;border:0.5px solid #222;border-radius:10px;padding:0.75rem 1.25rem;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
     <div style="font-size:13px;color:#888;">Apoie o projeto — <span style="color:#e8e8e8;font-weight:500;">doe via Pix</span></div>
-    <button onclick="copiarPix()" id="btn-pix" style="padding:6px 14px;border-radius:8px;border:0.5px solid #2e2e2e;background:#1e1e1e;color:#e8e8e8;font-size:12px;cursor:pointer;white-space:nowrap;"> Pix copia e cola</button>
+    <button onclick="copiarPix()" id="btn-pix" style="padding:6px 14px;border-radius:8px;border:0.5px solid #2e2e2e;background:#1e1e1e;color:#e8e8e8;font-size:12px;cursor:pointer;white-space:nowrap;">Pix copia e cola</button>
   </div>
 
   <div id="drop-zone" onclick="document.getElementById('file-input').click()">
     <input type="file" id="file-input" accept="application/pdf" />
-    <div class="icon">/</div>
+    <div class="icon">📄</div>
     <p><strong>Clique para selecionar</strong> ou arraste um PDF aqui</p>
   </div>
 
@@ -108,14 +108,16 @@
 const API_URL = '';
 
 // Estado agrupado para facilitar a manutenção
+const QUEUE_SIZE = 3; // quantos blobs pré-renderizar à frente
+
 const state = {
   paragraphs: [],
   currentIdx: 0,
   isPlaying: false,
-  nextAudioBlob: null,
+  audioQueue: [],        // fila de blobs pré-renderizados
+  queueAborts: [],       // AbortControllers da fila
   sessionId: 0,
-  preRenderAbort: null,
-  activeFetchAbort: null // <-- Controlador da requisição principal
+  activeFetchAbort: null
 };
 
 // ── Elementos DOM principais ─────────────────────────────
@@ -153,7 +155,7 @@ async function handleFile(file) {
   stopAll(true);
 
   DOM.fileInfo.style.display = 'block';
-  DOM.fileInfo.textContent = ' ' + file.name;
+  DOM.fileInfo.textContent = '/' + file.name;
   DOM.player.style.display = 'none';
   DOM.loading.style.display = 'flex';
   DOM.loadingText.textContent = 'Processando PDF...';
@@ -194,15 +196,15 @@ function renderList() {
 
 // ── Funcões de Cancelamento Global ───────────────────────
 function cancelAllFetches() {
-  if (state.preRenderAbort) { 
-    state.preRenderAbort.abort(); 
-    state.preRenderAbort = null; 
-  }
+  // aborta todos os pre-renders em andamento
+  state.queueAborts.forEach(ctrl => ctrl.abort());
+  state.queueAborts = [];
+  state.audioQueue = [];
+
   if (state.activeFetchAbort) {
     state.activeFetchAbort.abort();
     state.activeFetchAbort = null;
   }
-  state.nextAudioBlob = null;
 }
 
 // ── Navegação ───────────────────────────────────────────
@@ -320,33 +322,37 @@ async function fetchAudio(item, voice, signal) {
   return new Blob(chunks, { type: 'audio/mpeg' });
 }
 
-async function preRenderNext(sid) {
-  if (state.currentIdx + 1 >= state.paragraphs.length || !state.isPlaying) return;
-  
-  if (state.preRenderAbort) { 
-    state.preRenderAbort.abort(); 
-  }
-  state.preRenderAbort = new AbortController();
-  const ctrl = state.preRenderAbort;
+async function preRenderQueue(sid) {
+  // pré-renderiza os próximos QUEUE_SIZE parágrafos em paralelo
   const voice = DOM.voiceSelect.value;
-  
-  try {
-    const blob = await fetchAudio(state.paragraphs[state.currentIdx + 1], voice, ctrl.signal);
-    if (!ctrl.signal.aborted && state.sessionId === sid) {
-      state.nextAudioBlob = blob;
-    }
-  } catch(e) {
-    if (e.name !== 'AbortError') state.nextAudioBlob = null;
-  } finally {
-    if (state.preRenderAbort === ctrl) state.preRenderAbort = null;
+
+  for (let offset = 1; offset <= QUEUE_SIZE; offset++) {
+    const nextIdx = state.currentIdx + offset;
+    if (nextIdx >= state.paragraphs.length) break;
+    if (state.audioQueue[offset - 1]) continue; // já tem na fila
+
+    const ctrl = new AbortController();
+    state.queueAborts[offset - 1] = ctrl;
+
+    fetchAudio(state.paragraphs[nextIdx], voice, ctrl.signal)
+      .then(blob => {
+        if (!ctrl.signal.aborted && state.sessionId === sid) {
+          state.audioQueue[offset - 1] = blob;
+        }
+      })
+      .catch(e => {
+        if (e.name !== 'AbortError') state.audioQueue[offset - 1] = null;
+      });
   }
 }
 
 // ── Tocar Parágrafo ──────────────────────────────────────
 async function playParagraph(idx, sid) {
   const voice = DOM.voiceSelect.value;
-  let blob = state.nextAudioBlob;
-  state.nextAudioBlob = null;
+
+  // pega o primeiro da fila se disponível
+  let blob = state.audioQueue.shift() || null;
+  state.queueAborts.shift();
 
   if (!blob) {
     setStatus(`Gerando áudio... bloco ${idx + 1}`);
@@ -354,37 +360,35 @@ async function playParagraph(idx, sid) {
     try {
       blob = await fetchAudio(state.paragraphs[idx], voice, state.activeFetchAbort.signal);
     } catch(e) {
-      if (e.name === 'AbortError') return; // Sai limpo se foi cancelado
+      if (e.name === 'AbortError') return;
       throw e;
     } finally {
       state.activeFetchAbort = null;
     }
   }
 
-  // Se a sessão mudou durante o fetch
   if (state.sessionId !== sid) return;
 
   const url = URL.createObjectURL(blob);
   DOM.audio.src = url;
   DOM.audio.style.display = 'block';
-  
+
   const speedVal = parseInt(DOM.speedSlider.value);
   DOM.audio.playbackRate = Math.max(0.5, Math.min(2.0, 1 + speedVal / 100));
 
-  preRenderNext(sid);
+  // dispara pré-render da fila enquanto toca
+  preRenderQueue(sid);
 
   await DOM.audio.play();
 
   return new Promise((resolve, reject) => {
-    const onEnded = () => { cleanup(); if (state.sessionId === sid) resolve(); else resolve(); };
+    const onEnded = () => { cleanup(); resolve(); };
     const onError = (e) => { cleanup(); reject(e); };
-    
     const cleanup = () => {
       DOM.audio.removeEventListener('ended', onEnded);
       DOM.audio.removeEventListener('error', onError);
       URL.revokeObjectURL(url);
     };
-
     DOM.audio.addEventListener('ended', onEnded);
     DOM.audio.addEventListener('error', onError);
   });
@@ -431,7 +435,7 @@ function copiarPix() {
   const chave = '00020126580014br.gov.bcb.pix0136746a4b78-059c-423b-960a-4a13db0baa9e5204000053039865802BR5915TOMLEMEPATIENCE6009Sao Paulo610901227-20062240520daqr128062888063027063046DBB';
   navigator.clipboard.writeText(chave).then(() => {
     const btn = document.getElementById('btn-pix');
-    btn.textContent = 'Copiado!';
+    btn.textContent = '✓ Copiado!';
     btn.style.color = '#5b8ff9';
     setTimeout(() => { btn.textContent = 'Pix copia e cola'; btn.style.color = '#e8e8e8'; }, 2000);
   });
