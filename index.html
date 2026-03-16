@@ -55,6 +55,13 @@
 <div class="container">
   <h1>PDF <span>Reader</span></h1>
 
+
+  <!-- Banner de doação -->
+  <div id="pix-banner" style="background:#161616;border:0.5px solid #222;border-radius:10px;padding:0.75rem 1.25rem;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+    <div style="font-size:13px;color:#888;">Apoie o projeto — <span style="color:#e8e8e8;font-weight:500;">doe via Pix</span></div>
+    <button onclick="copiarPix()" id="btn-pix" style="padding:6px 14px;border-radius:8px;border:0.5px solid #2e2e2e;background:#1e1e1e;color:#e8e8e8;font-size:12px;cursor:pointer;white-space:nowrap;">📋 Pix copia e cola</button>
+  </div>
+
   <div id="drop-zone" onclick="document.getElementById('file-input').click()">
     <input type="file" id="file-input" accept="application/pdf" />
     <div class="icon">📄</div>
@@ -98,7 +105,7 @@
 <div id="toast"></div>
 
 <script>
-const API_URL = '';
+const API_URL = 'http://127.0.0.1:8000';
 
 // Estado agrupado para facilitar a manutenção
 const state = {
@@ -419,6 +426,17 @@ function showToast(msg) {
   t.classList.add('show');
   setTimeout(() => t.classList.remove('show'), 3000);
 }
+
+function copiarPix() {
+  const chave = '00020126580014br.gov.bcb.pix0136746a4b78-059c-423b-960a-4a13db0baa9e5204000053039865802BR5915TOMLEMEPATIENCE6009Sao Paulo610901227-20062240520daqr128062888063027063046DBB';
+  navigator.clipboard.writeText(chave).then(() => {
+    const btn = document.getElementById('btn-pix');
+    btn.textContent = 'Copiado!';
+    btn.style.color = '#5b8ff9';
+    setTimeout(() => { btn.textContent = 'Pix copia e cola'; btn.style.color = '#e8e8e8'; }, 2000);
+  });
+}
+
 </script>
 </body>
 </html>
