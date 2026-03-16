@@ -206,7 +206,7 @@ def extrair_com_pymupdf(pdf_bytes: bytes) -> list[dict]:
             texto = re.sub(r'\n', ' ', texto)
             texto = RE_URL.sub('', texto)
             texto = RE_SPACES.sub(' ', texto).strip()
-            text = re.sub(r'(\w+)-\s+([a-záàâãéêíóôõúç])', r'\1\2', text)
+            texto = re.sub(r'(\w+)-\s+([a-záàâãéêíóôõúç])', r'\1\2', texto)
 
             if len(texto) < 10: continue
             if RE_NUM_ONLY.match(texto): continue
